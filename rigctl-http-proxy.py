@@ -21,7 +21,7 @@ URL_PREFIX = '/rigctl-http-proxy/'
 RECONNECT_TIME_SEC = 1.0
 
 DEFAULT_RIGCTL = 'localhost:4532'
-DEFAULT_SERVER = '127.0.0.1:5566'
+DEFAULT_SERVER = 'localhost:5566'
 
 
 class RigctlService:
@@ -171,12 +171,14 @@ class RigctlHttpHandler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             freq = qs.get('F', [None])[0]
             mode = qs.get('M', [None])[0]
-            if rig:
+            if rig and rig.is_connected:
                 if freq is not None:
                     rig.send_freq(int(freq))
                     time.sleep(0.1)
                 if mode is not None:
                     rig.send_mode(mode)
+            else:
+                logger.info("could not send: rigctl not connected")
             self._status()
             return
 

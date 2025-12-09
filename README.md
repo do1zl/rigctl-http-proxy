@@ -13,7 +13,7 @@ python rigctl-http-proxy.py
 
 Options:
 - `-r, --rigctl HOST:PORT`  rigctl endpoint to connect to (default: `localhost:4532`)
-- `-s, --server HOST:PORT`  HTTP server bind address (default: `127.0.0.1:5566`)
+- `-s, --server HOST:PORT`  HTTP server bind address (default: `localhost:5566`)
 - `--debug` enable verbose IN/OUT logs
 - `-h, --help`  show help
 
