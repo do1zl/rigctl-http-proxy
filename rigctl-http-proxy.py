@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from queue import Empty
 from typing import Optional
 import argparse
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 logger = logging.getLogger("rigctl-http-proxy")
 
@@ -23,6 +23,8 @@ RECONNECT_TIME_SEC = 1.0
 DEFAULT_RIGCTL = 'localhost:4532'
 DEFAULT_SERVER = 'localhost:5566'
 
+# When True, skip allowed-actions validation (set via --no-check)
+NO_CHECK = False
 
 class RigctlService:
     def __init__(self, ip: str, port: int, debug: bool = False) -> None:
@@ -177,19 +179,9 @@ class RigctlHttpHandler(BaseHTTPRequestHandler):
             self._json(404, {"status": "error", "error": "not_found"})
             return
 
-        # Read body
-        cl_header = self.headers.get('Content-Length')
-        if cl_header is None:
-            self._json(400, {"status": "error", "error": "missing_content_length"})
-            return
+        # Read and parse JSON body (simple): rely on Content-Length if present.
         try:
-            content_length = int(cl_header)
-        except ValueError:
-            self._json(400, {"status": "error", "error": "bad_content_length"})
-            return
-
-        try:
-            raw = self.rfile.read(content_length)
+            raw = self.rfile.read(int(self.headers.get('Content-Length', '0')))
             data = json.loads(raw.decode('utf-8'))
         except Exception:
             self._json(400, {"status": "error", "error": "invalid_json"})
@@ -206,7 +198,7 @@ class RigctlHttpHandler(BaseHTTPRequestHandler):
             return
 
         # Validate actions: only F and M are supported for now
-        allowed_actions=('F', 'M')
+        allowed_actions = ('F', 'M')
 
         validated: list[str] = []
         for act in actions:
@@ -214,7 +206,10 @@ class RigctlHttpHandler(BaseHTTPRequestHandler):
                 self._json(400, {"status": "error", "error": "invalid_action"})
                 return
             t = act.strip()
-            if not t or t[0] not in allowed_actions:
+            if not t:
+                self._json(400, {"status": "error", "error": "invalid_action"})
+                return
+            if (not NO_CHECK) and t[0] not in allowed_actions:
                 self._json(400, {"status": "error", "error": "unsupported_action"})
                 return
             validated.append(t)
@@ -275,13 +270,18 @@ def parse_args():
         '--debug', action='store_true',
         help='enable verbose IN/OUT logs',
     )
+    parser.add_argument(
+        '--no-check', action='store_true',
+        help='skip allowed-action validation (accept any actions strings)',
+    )
     return parser.parse_args()
 
 
 def main():
-    global rig
+    global rig, NO_CHECK
 
     args = parse_args()
+    NO_CHECK = args.no_check
 
     rigctl_host, rigctl_port = args.rigctl
     rig = RigctlService(rigctl_host, rigctl_port, debug=args.debug)

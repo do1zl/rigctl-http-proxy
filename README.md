@@ -16,6 +16,7 @@ Options:
 - `-r, --rigctl HOST:PORT`  rigctl endpoint to connect to (default: `localhost:4532`)
 - `-s, --server HOST:PORT`  HTTP server bind address (default: `localhost:5566`)
 - `--debug` enable verbose IN/OUT logs
+- `--no-check` skip allowed-action validation (accept any action strings)
 - `-h, --help`  show help
 
 
@@ -32,7 +33,7 @@ Base path: `/rigctl-http-proxy/`
 - `POST /action` → body: `{ "version": 1, "actions": ["F 14074000", "M USB"] }`; returns the same status object
 
 Notes:
-- Only `F` and `M` commands are accepted in `actions` for now.
+- By default, only `F` and `M` commands are accepted in `actions`. Pass `--no-check` to allow arbitrary rigctl lines.
 - The action endpoint does not return the result of the rigctl call.
 
 ## Supported rigctl commands
