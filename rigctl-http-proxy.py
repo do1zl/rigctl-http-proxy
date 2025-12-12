@@ -76,6 +76,7 @@ class RigctlService:
                 reader_thread.start()
                 writer_thread.start()
                 logger.info("rigctl connected")
+                #self.send("\\dump_state")
 
                 # Main loop until stop requested
                 while self.is_connected:
@@ -97,7 +98,11 @@ class RigctlService:
                 input_line = input_line.rstrip("\r\n")
                 if self.debug:
                     logger.info("IN: '%s'", input_line)
+                if input_line == "RPRT 1":
+                    # error result
+                    logger.warning("IN: '%s'", input_line)
                 if input_line == "RPRT 0":
+                    # ok
                     continue
 
         except Exception:
@@ -122,14 +127,6 @@ class RigctlService:
         self.is_connected = False
 
     # --- Commands ---
-    def send_freq(self, f: int) -> None:
-        # logging.info("send freq")
-        self.send(f"F {f}")
-
-    def send_mode(self, mode_string: str) -> None:
-        cmd = f"M {mode_string}"
-        self.send(cmd)
-
     def send(self, t: str) -> None:
         t1 = t.strip()
         if self.is_connected:
@@ -167,30 +164,73 @@ class RigctlHttpHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip('/')
-        if path == URL_PREFIX + 'action':
-            qs = parse_qs(parsed.query)
-            freq = qs.get('F', [None])[0]
-            mode = qs.get('M', [None])[0]
-            if rig and rig.is_connected:
-                if freq is not None:
-                    rig.send_freq(int(freq))
-                    time.sleep(0.1)
-                if mode is not None:
-                    rig.send_mode(mode)
-            else:
-                logger.info("could not send: rigctl not connected")
-            self._status()
-            return
-
         if path == URL_PREFIX + 'status':
             self._status()
             return
 
         self._json(404, {"status": "error", "error": "not_found"})
 
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip('/')
+        if path != URL_PREFIX + 'action':
+            self._json(404, {"status": "error", "error": "not_found"})
+            return
+
+        # Read body
+        cl_header = self.headers.get('Content-Length')
+        if cl_header is None:
+            self._json(400, {"status": "error", "error": "missing_content_length"})
+            return
+        try:
+            content_length = int(cl_header)
+        except ValueError:
+            self._json(400, {"status": "error", "error": "bad_content_length"})
+            return
+
+        try:
+            raw = self.rfile.read(content_length)
+            data = json.loads(raw.decode('utf-8'))
+        except Exception:
+            self._json(400, {"status": "error", "error": "invalid_json"})
+            return
+
+        if not isinstance(data, dict):
+            self._json(400, {"status": "error", "error": "invalid_payload"})
+            return
+
+        version = data.get('version')
+        actions = data.get('actions')
+        if not isinstance(version, (int, float)) or not isinstance(actions, list):
+            self._json(400, {"status": "error", "error": "invalid_payload"})
+            return
+
+        # Validate actions: only F and M are supported for now
+        allowed_actions=('F', 'M')
+
+        validated: list[str] = []
+        for act in actions:
+            if not isinstance(act, str):
+                self._json(400, {"status": "error", "error": "invalid_action"})
+                return
+            t = act.strip()
+            if not t or t[0] not in allowed_actions:
+                self._json(400, {"status": "error", "error": "unsupported_action"})
+                return
+            validated.append(t)
+
+        if rig and rig.is_connected:
+            for t in validated:
+                rig.send(t)
+                time.sleep(0.1)
+        else:
+            logger.info("could not send: rigctl not connected")
+
+        self._status()
+
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         req_headers = self.headers.get('Access-Control-Request-Headers')
         if req_headers:
             self.send_header('Access-Control-Allow-Headers', req_headers)
@@ -215,7 +255,7 @@ def endpoint_arg(value: str) -> tuple[str, int]:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='HTTP proxy that translates simple /action GETs into rigctl commands.',
+        description='HTTP proxy that translates POST /action requests into rigctl commands.',
     )
     parser.add_argument(
         '-r', '--rigctl',
