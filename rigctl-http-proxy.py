@@ -18,7 +18,7 @@ shutdown_evt = threading.Event()
 
 URL_PREFIX = '/rigctl-http-proxy/'
 
-RECONNECT_TIME_SEC = 1.0
+DEFAULT_RECONNECT_TIME_SEC = 1
 
 DEFAULT_RIGCTL = 'localhost:4532'
 DEFAULT_SERVER = 'localhost:5566'
@@ -27,10 +27,11 @@ DEFAULT_SERVER = 'localhost:5566'
 NO_CHECK = False
 
 class RigctlService:
-    def __init__(self, ip: str, port: int, debug: bool = False) -> None:
+    def __init__(self, ip: str, port: int, debug: bool = False, reconnect_time_sec: int = 1) -> None:
         self.ip = ip
         self.port = port
         self.debug = debug
+        self.reconnect_time_sec = reconnect_time_sec
         self.blocking_queue: "queue.Queue[str]" = queue.Queue()
         self.is_connected: bool = False
         self.stop_requested: bool = False
@@ -48,11 +49,12 @@ class RigctlService:
     def start_client(self) -> None:
         # Loop forever, reconnecting to ip
         logger.info("rigctl endpoint = " + self.ip + ":" + str(self.port))
+        logger.info("rigctl reconnect time = " + str(self.reconnect_time_sec))
         while True and not self.stop_requested:
             self.connect_and_process(self.ip, self.port)
             if self.stop_requested:
                 return
-            time.sleep(RECONNECT_TIME_SEC)
+            time.sleep(self.reconnect_time_sec)
 
     # --- Connection processing ---
     def connect_and_process(self, ip: str, port: int) -> None:
@@ -233,6 +235,25 @@ class RigctlHttpHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+def run_server(server_host, server_port):
+    httpd = HTTPServer((server_host, server_port), RigctlHttpHandler)
+    logger.info(f'Proxy serving on http://{server_host}:{server_port}{URL_PREFIX}')
+
+    def on_shutdown(signum, frame):
+        logger.info("Shutting down...")
+        shutdown_evt.set()
+        if rig:
+            rig.request_stop()
+        # shutdown() must be called from another thread
+        threading.Thread(target=httpd.shutdown, name="httpd-shutdown", daemon=True).start()
+
+    signal.signal(signal.SIGINT, on_shutdown)
+    signal.signal(signal.SIGTERM, on_shutdown)
+
+    try:
+        httpd.serve_forever(poll_interval=0.1)
+    finally:
+        httpd.server_close()
 
 def endpoint_arg(value: str) -> tuple[str, int]:
     if ':' not in value:
@@ -274,6 +295,12 @@ def parse_args():
         '--no-check', action='store_true',
         help='skip allowed-action validation (accept any actions strings)',
     )
+    parser.add_argument(
+        '--reconnect-time-sec',
+        type=int,
+        default=DEFAULT_RECONNECT_TIME_SEC,
+        help=f'Wait time in seconds before reconnecting to rigctl (default: {DEFAULT_RECONNECT_TIME_SEC})',
+    )
     return parser.parse_args()
 
 
@@ -284,28 +311,18 @@ def main():
     NO_CHECK = args.no_check
 
     rigctl_host, rigctl_port = args.rigctl
-    rig = RigctlService(rigctl_host, rigctl_port, debug=args.debug)
+    reconnect_time_sec = args.reconnect_time_sec
+    if reconnect_time_sec < 1:
+        reconnect_time_sec = 1
+    rig = RigctlService(rigctl_host, rigctl_port, debug=args.debug, reconnect_time_sec=reconnect_time_sec)
     rig.start()
 
     server_host, server_port = args.server
-    httpd = HTTPServer((server_host, server_port), RigctlHttpHandler)
-    logger.info(f'Proxy serving on http://{server_host}:{server_port}{URL_PREFIX}')
-
-    def on_shutdown(signum, frame):
-        logger.info("Shutting down...")
-        shutdown_evt.set()
-        if rig:
-            rig.request_stop()
-        # shutdown() must be called from another thread
-        threading.Thread(target=httpd.shutdown, name="httpd-shutdown", daemon=True).start()
-
-    signal.signal(signal.SIGINT, on_shutdown)
-    signal.signal(signal.SIGTERM, on_shutdown)
-
     try:
-        httpd.serve_forever(poll_interval=0.1)
-    finally:
-        httpd.server_close()
+        run_server(server_host, server_port)
+    except Exception as e:
+        logger.error("Error starting server: " + str(e))
+
 
 
 def setup_logging():

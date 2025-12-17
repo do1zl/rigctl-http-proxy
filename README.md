@@ -17,6 +17,7 @@ Options:
 - `-s, --server HOST:PORT`  HTTP server bind address (default: `localhost:5566`)
 - `--debug` enable verbose IN/OUT logs
 - `--no-check` skip allowed-action validation (accept any action strings)
+- `--reconnect-time-sec n` Wait time in seconds before reconnecting to rigctl (default: 1)
 - `-h, --help`  show help
 
 
